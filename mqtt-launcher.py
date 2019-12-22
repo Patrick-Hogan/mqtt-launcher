@@ -38,22 +38,15 @@ import paho.mqtt.client as paho   # pip install paho-mqtt
 import time
 import socket
 import string
+import json
 
 qos=2
-CONFIG=os.getenv('MQTTLAUNCHERCONFIG', 'launcher.conf')
-
-class Config(object):
-    def __init__(self, filename=CONFIG):
-        self.config = {}
-        execfile(filename, self.config)
-
-    def get(self, key, default=None):
-        return self.config.get(key, default)
+CONFIG=os.getenv('MQTTLAUNCHERCONFIG', 'launcher.json')
 
 try:
-    cf = Config()
-except Exception, e:
-    print "Cannot load configuration from file %s: %s" % (CONFIG, str(e))
+    cf = json.load(open(CONFIG,'r'))
+except Exception as e:
+    print("Cannot load configuration from file {0}: {1}".format(CONFIG, str(e)))
     sys.exit(2)
 
 LOGFILE = cf.get('logfile', 'logfile')
@@ -83,8 +76,8 @@ def runprog(topic, param=None):
     if param is not None and param in topiclist[topic]:
         cmd = topiclist[topic].get(param)
     else:
-        if None in topiclist[topic]: ### and topiclist[topic][None] is not None:
-            cmd = [p.replace('@!@', param) for p in topiclist[topic][None]]
+        if 'pass' in topiclist[topic]: ### and topiclist[topic][None] is not None:
+            cmd = [p.replace('@!@', param) for p in topiclist[topic]['pass']]
         else:
             logging.info("No matching param (%s) for %s" % (param, topic))
             return
@@ -93,7 +86,7 @@ def runprog(topic, param=None):
 
     try:
         res = subprocess.check_output(cmd, stdin=None, stderr=subprocess.STDOUT, shell=False, universal_newlines=True, cwd='/tmp')
-    except Exception, e:
+    except Exception as e:
         res = "*****> %s" % str(e)
 
     payload = res.rstrip('\n')
@@ -103,7 +96,7 @@ def runprog(topic, param=None):
 def on_message(mosq, userdata, msg):
     logging.debug(msg.topic+" "+str(msg.qos)+" "+str(msg.payload))
 
-    runprog(msg.topic, str(msg.payload))
+    runprog(msg.topic, str(msg.payload.decode()))
 
 def on_connect(mosq, userdata, flags, result_code):
     logging.debug("Connected to MQTT broker, subscribing to topics...")
