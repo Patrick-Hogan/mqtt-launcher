@@ -34,111 +34,150 @@ import os
 import sys
 import subprocess
 import logging
+import logging.config
 import paho.mqtt.client as paho   # pip install paho-mqtt
 import time
 import socket
 import string
-import json
+import yaml
+import threading
 
-qos=2
-CONFIG=os.getenv('MQTTLAUNCHERCONFIG', 'launcher.json')
+QOS = 2
+CONFIG=os.getenv('MQTTLAUNCHERCONFIG', 'launcher.yaml')
 
 try:
-    cf = json.load(open(CONFIG,'r'))
+    cf = yaml.load(open(CONFIG,'r'), Loader=yaml.FullLoader)
 except Exception as e:
     print("Cannot load configuration from file {0}: {1}".format(CONFIG, str(e)))
     sys.exit(2)
 
-LOGFILE = cf.get('logfile', 'logfile')
-LOGFORMAT = '%(asctime)-15s %(message)s'
-DEBUG=True
+if cf.get('log'):
+    logging.config.dictConfig(cf['log'])
 
-if DEBUG:
-    logging.basicConfig(filename=LOGFILE, level=logging.DEBUG, format=LOGFORMAT)
-else:
-    logging.basicConfig(filename=LOGFILE, level=logging.INFO, format=LOGFORMAT)
-
-logging.info("Starting")
-logging.debug("DEBUG MODE")
+logger = logging.getLogger(__name__) 
+logger.info("Starting")
+logger.debug("DEBUG MODE")
 
 def runprog(topic, param=None):
 
     publish = "%s/report" % topic
 
     if param is not None and all(c in string.printable for c in param) == False:
-        logging.debug("Param for topic %s is not printable; skipping" % (topic))
+        logger.debug("Param for topic %s is not printable; skipping" % (topic))
         return
 
-    if not topic in topiclist:
-        logging.info("Topic %s isn't configured" % topic)
+    if not topic in topics:
+        logger.info("Topic %s isn't configured" % topic)
         return
 
-    if param is not None and param in topiclist[topic]:
-        cmd = topiclist[topic].get(param)
-    else:
-        if 'pass' in topiclist[topic]: ### and topiclist[topic][None] is not None:
-            cmd = [p.replace('@!@', param) for p in topiclist[topic]['pass']]
+    if param is not None and param in topics[topic]:
+        cmd = topics[topic].get(param)
+        if cmd.get('arg_template', None):
+            args = [arg.replace('{{ value }}', param) for arg in cmd['arg_template']]
         else:
-            logging.info("No matching param (%s) for %s" % (param, topic))
-            return
+            args = cmd.get('args', [])
+    else:
+        logger.info("No matching param (%s) for %s" % (param, topic))
+        return
 
-    logging.debug("Running t=%s: %s" % (topic, cmd))
+    logger.debug("Running t=%s: %s" % (topic, cmd['command']))
 
     try:
-        res = subprocess.check_output(cmd, stdin=None, stderr=subprocess.STDOUT, shell=False, universal_newlines=True, cwd='/tmp')
+        fullcmd = [cmd['command']]
+        if args:
+            fullcmd.extend(args)
+        res = subprocess.check_output(fullcmd, 
+                                      stdin=None, 
+                                      stderr=subprocess.STDOUT, 
+                                      shell=False, 
+                                      universal_newlines=True, 
+                                      cwd='/tmp')
     except Exception as e:
         res = "*****> %s" % str(e)
 
     payload = res.rstrip('\n')
-    (res, mid) =  mqttc.publish(publish, payload, qos=qos, retain=False)
+    (res, mid) =  mqttc.publish(publish, 
+                                payload,
+                                qos=cmd.get('qos', QOS),
+                                retain=cmd.get('retain', False))
 
+def publish_periodic(topic, param, interval):
+    while True:
+        runprog(topic, param)
+        time.sleep(interval)
 
 def on_message(mosq, userdata, msg):
-    logging.debug(msg.topic+" "+str(msg.qos)+" "+str(msg.payload))
+    logger.debug(msg.topic+" "+str(msg.qos)+" "+str(msg.payload))
 
     runprog(msg.topic, str(msg.payload.decode()))
 
 def on_connect(mosq, userdata, flags, result_code):
-    logging.debug("Connected to MQTT broker, subscribing to topics...")
-    for topic in topiclist:
-        mqttc.subscribe(topic, qos)
+    logger.debug("Connected to MQTT broker, subscribing to topics...")
+    for topic, cmd in topics.items():
+        mqttc.subscribe(topic, cmd.get('qos', QOS))
+    mqttc.publish('mqtt-launcher/{0}'.format(cf['mqtt']['clientid']), 
+                  payload="Online", 
+                  qos=0, 
+                  retain=True) 
+
+    for topic, commands in cf['topics'].items(): 
+        for name, command in commands.items():
+            interval = command.get('interval', 0)
+            if interval:
+                thread = threading.Thread(target=publish_periodic,
+                                          args=(topic, name, interval),
+                                          daemon=True)
+                thread.start()
 
 
 def on_disconnect(mosq, userdata, rc):
-    logging.debug("OOOOPS! launcher disconnects")
+    logger.debug("OOOOPS! launcher disconnects")
     time.sleep(10)
 
 if __name__ == '__main__':
 
-    userdata = {
-    }
-    topiclist = cf.get('topiclist')
+    userdata = {}
+    topics = cf.get('topics')
 
-    if topiclist is None:
-        logging.info("No topic list. Aborting")
+    if topics is None:
+        logger.info("No topic list. Aborting")
         sys.exit(2)
 
-    clientid = cf.get('mqtt_clientid', 'mqtt-launcher-%s' % os.getpid())
+    if cf.get('mqtt') is None:
+        logger.error('No mqtt section in config. Aborting.')
+        sys.exit(1)
+
+    cf['mqtt'].setdefault('clientid', 'mqtt-launcher-%s' % os.getpid())
+    clientid = cf['mqtt'].get('clientid')
+
     # initialise MQTT broker connection
     mqttc = paho.Client(clientid, clean_session=False)
-
 
     mqttc.on_message = on_message
     mqttc.on_connect = on_connect
     mqttc.on_disconnect = on_disconnect
 
-    mqttc.will_set('clients/mqtt-launcher', payload="Adios!", qos=0, retain=False)
+    mqttc.will_set('mqtt-launcher/{0}'.format(clientid), 
+                    payload="Offline", 
+                    qos=0, 
+                    retain=True)
 
     # Delays will be: 3, 6, 12, 24, 30, 30, ...
     #mqttc.reconnect_delay_set(delay=3, delay_max=30, exponential_backoff=True)
 
-    if cf.get('mqtt_username') is not None:
-        mqttc.username_pw_set(cf.get('mqtt_username'), cf.get('mqtt_password'))
+    if cf['mqtt'].get('username') is not None:
+        mqttc.username_pw_set(cf['mqtt'].get('username'), cf['mqtt'].get('password'))
     
-    if cf.get('mqtt_tls') is not None:
+    if cf['mqtt'].get('tls', False):
         mqttc.tls_set()
 
-    mqttc.connect(cf.get('mqtt_broker', 'localhost'), int(cf.get('mqtt_port', '1883')), 60)
+    for topic, commands in cf['topics'].items(): 
+        for name, command in commands.items():
+            if command.get('command') is None:
+                logger.error("Unable to configure {0}:{1} command not set"
+                            .format(topic, name))
+
+    mqttc.connect(cf['mqtt'].get('broker', 'localhost'), int(cf['mqtt'].get('port', 1883)), 60)
 
     while True:
         try:

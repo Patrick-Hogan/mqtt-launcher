@@ -1,0 +1,86 @@
+# Standard python dictionary config for logging:
+log:
+    version: 1
+    disable_existing_loggers: False
+    formatters:
+        simple:
+            format: '%(asctime)-15s %(message)s'
+    handlers:
+        file: 
+            class: "logging.handlers.RotatingFileHandler"
+            level: DEBUG
+            formatter: simple
+            filename: mqtt.log
+            maxBytes: 10485670
+            backupCount: 20
+            encoding: utf8
+        console:
+            class: logging.StreamHandler
+            level: DEBUG
+            formatter: simple
+            stream: 'ext://sys.stdout'
+    loggers:
+        mqtt_launcher:
+            level: DEBUG
+            handlers: [console, file]
+            propagate: no
+    root:
+        level: DEBUG
+        handlers: [console, file]
+
+mqtt:
+    broker    : 'localhost'       # default: 'localhost'. If using TLS, this must be set to the domain name signed by your TLS certificate.
+    port      : 1883              # default: 1883
+    clientid  : 'mqtt-launcher-1'
+    username  : None
+    password  : None
+    tls       : None              # default: No TLS
+
+topics: 
+    # topic                     payload value       program & arguments
+    "sys/file":
+        'create': 
+            command: '/usr/bin/touch'
+            args: 
+                - '/tmp/file.one'
+        'false':
+            command: '/bin/rm'
+            args: 
+                - '-f' 
+                - '/tmp/file.one'
+        'info':
+            command: '/bin/ls'
+            args:
+                - '-l'
+                - '/tmp/file.one'
+    "prog/pwd":
+        None: 
+            command: 'pwd' 
+    "dev/1": 
+        None:   
+            command: 'ls'
+            args: 
+                - '-l'
+                - '/'
+    "dev/2":
+        None:
+            command: "/bin/echo"
+            arg_template:
+                - "111"
+                - "*" 
+                - "{{ value }}"
+                - "222" 
+                - "{{ value }}"
+                - "333"
+    "dev/3":
+        None: 
+            command: "/bin/sh"
+            arg_template:
+                - '-c'
+                - 'var={{ value }}; echo $var'
+    "dev/4":
+        None:
+            command: "/bin/bash" 
+            arg_template:
+                - '-c'
+                - 'IFS="/" read -r var1 var2 <<< "{{ value }}"; echo "var1=$var1 var2=$var2"'
