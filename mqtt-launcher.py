@@ -42,7 +42,8 @@ import string
 import yaml
 import threading
 
-QOS = 2
+QOS = 0
+DEFAULT_TIMEOUT = 10  # seconds
 CONFIG=os.getenv('MQTTLAUNCHERCONFIG', 'launcher.yaml')
 
 try:
@@ -80,26 +81,38 @@ def runprog(topic, param=None):
         logger.info("No matching param (%s) for %s" % (param, topic))
         return
 
-    logger.debug("Running t=%s: %s" % (topic, cmd['command']))
+    logger.debug("Running t=%s: %s on pid: %d" % (topic, cmd['command'], os.getpid()))
+
+    fullcmd = [cmd['command']]
+    if args:
+        fullcmd.extend(args)
+    logger.debug("Args: %s" % ', '.join(args))
+
+    timeout_sec = cmd.get('timeout', DEFAULT_TIMEOUT)
+    proc = subprocess.Popen(fullcmd, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT)
+    timer = threading.Timer(timeout_sec, proc.kill)
 
     try:
-        fullcmd = [cmd['command']]
-        if args:
-            fullcmd.extend(args)
-        res = subprocess.check_output(fullcmd, 
-                                      stdin=None, 
-                                      stderr=subprocess.STDOUT, 
-                                      shell=False, 
-                                      universal_newlines=True, 
-                                      cwd='/tmp')
+        timer.start()
+        res, err = proc.communicate()
+        if res:
+            res = res.decode().strip()
+        if err:
+            err = err.decode().strip()
+        logger.debug("Result: %s; stderr: %s" % (str(res), str(err)))
     except Exception as e:
         res = "*****> %s" % str(e)
+    finally:
+        timer.cancel()
 
-    payload = res.rstrip('\n')
+    logger.debug("Publishing: \n\ttopic: %s\n\tpayload: %s\n\tretain: %s" % 
+            (publish, res, cmd.get('retain', False)))
     (res, mid) =  mqttc.publish(publish, 
-                                payload,
+                                res,
                                 qos=cmd.get('qos', QOS),
                                 retain=cmd.get('retain', False))
+    logger.debug("Done running program")
 
 def publish_periodic(topic, param, interval):
     while True:
@@ -110,6 +123,7 @@ def on_message(mosq, userdata, msg):
     logger.debug(msg.topic+" "+str(msg.qos)+" "+str(msg.payload))
 
     runprog(msg.topic, str(msg.payload.decode()))
+    logger.debug("on_message completed")
 
 def on_connect(mosq, userdata, flags, result_code):
     logger.debug("Connected to MQTT broker, subscribing to topics...")
