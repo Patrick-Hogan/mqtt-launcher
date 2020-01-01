@@ -12,16 +12,16 @@ create a particular semaphore file for me:
 mosquitto_pub -t sys/file -m create
 ```
 
-The configuration file must be valid Python and it is loaded once. It contains
+The configuration file must be valid json and it is loaded once. It contains
 the topic / process associations.
 
-```python
+```json
 # topic         payload value           program & arguments
 "sys/file"  :   {
-                    'create'        :   [ '/usr/bin/touch', '/tmp/file.one' ],
-                    'false'         :   [ '/bin/rm', '-f', '/tmp/file.one'    ],
-                    'info'          :   [ '/bin/ls', '-l', '/tmp/file.one' ],
-                },
+                    "create"        :   [ "/usr/bin/touch", "/tmp/file.one" ],
+                    "false"         :   [ "/bin/rm", "-f", "/tmp/file.one"  ],
+                    "info"          :   [ "/bin/ls", "-l", "/tmp/file.one"  ]
+                }
 ```
 
 Above snippet instructs _mqtt-launcher_ to:
@@ -92,9 +92,9 @@ mosquitto_pub -t dev/4 -m 'foo/bar'
 
 ## Configuration
 
-_mqtt-launcher_ loads a Python configuration from the path contained in
+_mqtt-launcher_ loads a JSON configuration from the path contained in
 the environment variable `$MQTTLAUNCHERCONFIG`; if unset, the path
-defaults to `launcher.conf`. See the provided `launcher.conf.example`.
+defaults to `launcher.json`. See the provided `launcher.json.example`.
 
 ## Logging
 
